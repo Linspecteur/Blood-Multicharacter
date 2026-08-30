@@ -227,15 +227,17 @@ local function openMulticharacterUI(isManual)
     
     setupCamera()
 
-    ESX.TriggerServerCallback('bl_multicharacter:getCharacters', function(characters, maxSlots, playerCount, isStaffOrVip)
+    ESX.TriggerServerCallback('bl_multicharacter:getCharacters', function(characters, slotConfigs, playerCount, isVip, isStaff)
         SetNuiFocus(true, true)
         SendNUIMessage({
             action = "openUI",
             characters = characters,
-            maxSlots = maxSlots,
+            slotConfigs = slotConfigs,
+            maxSlots = slotConfigs,
             playerCount = playerCount or 1,
             canClose = isManual or ESX.PlayerLoaded,
-            isStaff = isStaffOrVip,
+            isVIP = isVip or false,
+            isStaff = isStaff or false,
             spawns = Config.Spawns
         })
     end)
@@ -245,18 +247,81 @@ RegisterNetEvent('bl_multicharacter:setupCharacters')
 AddEventHandler('bl_multicharacter:setupCharacters', function()
     -- Re-fetch and update UI (useful after create/delete)
     if isUIVisible then
-        ESX.TriggerServerCallback('bl_multicharacter:getCharacters', function(characters, maxSlots, playerCount, isStaffOrVip)
+        ESX.TriggerServerCallback('bl_multicharacter:getCharacters', function(characters, slotConfigs, playerCount, isVip, isStaff)
             SendNUIMessage({
                 action = "openUI",
                 characters = characters,
-                maxSlots = maxSlots,
+                slotConfigs = slotConfigs,
+                maxSlots = slotConfigs,
                 playerCount = playerCount or 1,
-                isStaff = isStaffOrVip,
+                isVIP = isVip or false,
+                isStaff = isStaff or false,
                 spawns = Config.Spawns
             })
         end)
     end
 end)
+
+-- Core Function for ultra-fast, accurate character skin application & preview
+local function ApplyCharacterSkin(ped, skin)
+    if not ped or not DoesEntityExist(ped) then ped = PlayerPedId() end
+    if not skin then return end
+    
+    -- 1. Determine target model (Female or Male)
+    local isFemale = false
+    if skin.sex == 1 or skin.sex == '1' or skin.sex == 'f' or skin.sex == 'F' or skin.sex == true then
+        isFemale = true
+    end
+    
+    local targetModel = isFemale and `mp_f_freemode_01` or `mp_m_freemode_01`
+    local currentModel = GetEntityModel(ped)
+    
+    -- Instant Model Switch if needed
+    if currentModel ~= targetModel then
+        RequestModel(targetModel)
+        while not HasModelLoaded(targetModel) do Wait(0) end
+        SetPlayerModel(PlayerId(), targetModel)
+        ped = PlayerPedId()
+        SetPedDefaultComponentVariation(ped)
+        SetModelAsNoLongerNeeded(targetModel)
+    end
+    
+    -- Temporarily unfreeze to allow native components/props attachment
+    FreezeEntityPosition(ped, false)
+    
+    -- 2. Direct fast application via bl_appearance export
+    local applied = false
+    if GetResourceState('bl_appearance') == 'started' then
+        pcall(function()
+            exports['bl_appearance']:setPedAppearance(ped, skin)
+            applied = true
+        end)
+    end
+    
+    if not applied and GetResourceState('fivem-appearance') == 'started' then
+        pcall(function()
+            exports['fivem-appearance']:setPedAppearance(ped, skin)
+            applied = true
+        end)
+    end
+    
+    if not applied and GetResourceState('illenium-appearance') == 'started' then
+        pcall(function()
+            exports['illenium-appearance']:setPedAppearance(ped, skin)
+            applied = true
+        end)
+    end
+    
+    -- 3. Fallback to skinchanger & esx_skin
+    TriggerEvent('skinchanger:loadSkin', skin)
+    TriggerEvent('esx_skin:loadSkin', skin)
+    
+    -- Teleport to PedCoords and re-freeze
+    SetEntityCoords(ped, PedCoords.x, PedCoords.y, PedCoords.z - 1.0)
+    SetEntityHeading(ped, PedCoords.w)
+    FreezeEntityPosition(ped, true)
+    SetEntityVisible(ped, true, false)
+end
 
 -- NUI Callbacks
 RegisterNUICallback('closeUI', function(data, cb)
@@ -267,17 +332,7 @@ RegisterNUICallback('closeUI', function(data, cb)
     
     -- Restore original skin
     if originalSkin then
-        local restored = pcall(function()
-            exports['fivem-appearance']:setPedAppearance(PlayerPedId(), originalSkin)
-        end)
-        if not restored then
-            restored = pcall(function()
-                exports['illenium-appearance']:setPedAppearance(PlayerPedId(), originalSkin)
-            end)
-        end
-        if not restored then
-            TriggerEvent('skinchanger:loadSkin', originalSkin)
-        end
+        ApplyCharacterSkin(PlayerPedId(), originalSkin)
         originalSkin = nil
     end
     
@@ -287,13 +342,7 @@ end)
 RegisterNUICallback('previewCharacter', function(data, cb)
     local charId = data.charId
     local skinData = data.skin
-    
     local ped = PlayerPedId()
-    SetEntityVisible(ped, true, false)
-    
-    -- Teleport player ped to PedCoords
-    SetEntityCoords(ped, PedCoords.x, PedCoords.y, PedCoords.z - 1.0)
-    SetEntityHeading(ped, PedCoords.w)
     
     local skin = nil
     if skinData then
@@ -304,34 +353,23 @@ RegisterNUICallback('previewCharacter', function(data, cb)
         end
     end
     
-    -- Load character skin and clothing directly on PlayerPedId()
     if skin then
-        -- Unfreeze ped for a short moment so clothing resources can apply components/textures properly
-        FreezeEntityPosition(ped, false)
-        
-        local loaded = pcall(function()
-            exports['fivem-appearance']:setPedAppearance(ped, skin)
-        end)
-        if not loaded then
-            loaded = pcall(function()
-                exports['illenium-appearance']:setPedAppearance(ped, skin)
-            end)
-        end
-        if not loaded then
-            TriggerEvent('skinchanger:loadSkin', skin)
-            TriggerEvent('esx_skin:loadSkin', skin)
-        end
-        
-        -- Small delay to let skin apply before re-freezing
-        Wait(200)
-        FreezeEntityPosition(ped, true)
+        ApplyCharacterSkin(ped, skin)
     else
-        -- Fallback default
+        -- Fallback default male ped
         local model = `mp_m_freemode_01`
-        RequestModel(model)
-        while not HasModelLoaded(model) do Wait(10) end
-        SetPlayerModel(PlayerId(), model)
-        SetPedDefaultComponentVariation(PlayerPedId())
+        if GetEntityModel(ped) ~= model then
+            RequestModel(model)
+            while not HasModelLoaded(model) do Wait(0) end
+            SetPlayerModel(PlayerId(), model)
+            ped = PlayerPedId()
+            SetPedDefaultComponentVariation(ped)
+            SetModelAsNoLongerNeeded(model)
+        end
+        SetEntityCoords(ped, PedCoords.x, PedCoords.y, PedCoords.z - 1.0)
+        SetEntityHeading(ped, PedCoords.w)
+        FreezeEntityPosition(ped, true)
+        SetEntityVisible(ped, true, false)
     end
     
     -- Re-evaluate ped ID after optional model load
@@ -348,17 +386,7 @@ end)
 RegisterNUICallback('previewEmpty', function(data, cb)
     local ped = PlayerPedId()
     SetEntityVisible(ped, false, false)
-    
-    -- Reset ped to default so new characters don't inherit the previous character's skin
-    local model = `mp_m_freemode_01`
-    RequestModel(model)
-    while not HasModelLoaded(model) do Wait(10) end
-    SetPlayerModel(PlayerId(), model)
-    SetPedDefaultComponentVariation(PlayerPedId())
-    SetModelAsNoLongerNeeded(model)
-    
-    -- Reset skinchanger cache
-    TriggerEvent('skinchanger:loadSkin', {sex = 0})
+    FreezeEntityPosition(ped, true)
     
     -- Position camera facing the empty spawn point
     local rad = math.rad(PedCoords.w)
@@ -395,7 +423,23 @@ RegisterNUICallback('playCharacter', function(data, cb)
     cb('ok')
 end)
 
+local lastCreatedGender = 'm'
+local isCreatingNewChar = false
+
 RegisterNUICallback('createCharacter', function(data, cb)
+    isUIVisible = false
+    SetNuiFocus(false, false)
+    lastCreatedGender = (data and data.sex) or 'm'
+    isCreatingNewChar = true
+    
+    -- Fade out the screen completely to block rendering before creator transition
+    DoScreenFadeOut(500)
+    Wait(500)
+    
+    destroyCamera(true, true) -- Destroy multicharacter camera immediately in the dark
+    SendNUIMessage({ action = "closeUI" })
+    originalSkin = nil
+
     TriggerServerEvent('bl_multicharacter:createCharacter', data)
     cb('ok')
 end)
@@ -433,6 +477,8 @@ end
 RegisterNetEvent('esx:playerLoaded')
 AddEventHandler('esx:playerLoaded', function(playerData, isNew, skin)
     local spawnCoords = nil
+    local isNewCharacter = isCreatingNewChar or isNew or isSkinEmpty(skin)
+    isCreatingNewChar = false
     
     -- Fallback for ESX Legacy where skin is inside playerData
     if not skin and playerData and playerData.skin then
@@ -445,17 +491,24 @@ AddEventHandler('esx:playerLoaded', function(playerData, isNew, skin)
     
     -- Diagnostic F8 console print to see parameters passed by ESX
     if Config.Debug then
-        print(("[bl_multicharacter] esx:playerLoaded triggered | isNew: %s | skin type: %s | isSkinEmpty: %s"):format(tostring(isNew), type(skin), tostring(isSkinEmpty(skin))))
+        print(("[bl_multicharacter] esx:playerLoaded triggered | isNewCharacter: %s | isNew: %s | skin type: %s"):format(tostring(isNewCharacter), tostring(isNew), type(skin)))
     end
     
-    if isNew or isSkinEmpty(skin) then
+    if isNewCharacter then
         spawnCoords = {x = Config.PedCoords.x, y = Config.PedCoords.y, z = Config.PedCoords.z, heading = Config.PedCoords.w}
     elseif chosenSpawnCoords then
+        -- Dispersion anti-collision : Décalage radial aléatoire (1.2m à 3.0m) pour éviter la superposition de joueurs
+        local angle = math.random() * 2 * math.pi
+        local radius = math.random(12, 30) / 10.0
+        local offsetX = math.cos(angle) * radius
+        local offsetY = math.sin(angle) * radius
+        local headingOffset = math.random(-15, 15)
+        
         spawnCoords = {
-            x = chosenSpawnCoords.x,
-            y = chosenSpawnCoords.y,
+            x = chosenSpawnCoords.x + offsetX,
+            y = chosenSpawnCoords.y + offsetY,
             z = chosenSpawnCoords.z,
-            heading = chosenSpawnCoords.heading or 0.0
+            heading = ((chosenSpawnCoords.heading or 0.0) + headingOffset) % 360.0
         }
     elseif playerData.coords then
         spawnCoords = {
@@ -470,32 +523,26 @@ AddEventHandler('esx:playerLoaded', function(playerData, isNew, skin)
 
     chosenSpawnCoords = nil -- Reset chosen coords
 
-    ESX.SpawnPlayer(skin and skin.sex and skin or {sex = 0}, spawnCoords, function()
+    -- Determine gender accurately before spawning so player spawns DIRECTLY as female or male
+    local isFemale = (lastCreatedGender == 'f' or lastCreatedGender == 'F' or lastCreatedGender == 1 or lastCreatedGender == '1' or (playerData and (playerData.sex == 'f' or playerData.sex == 'F' or playerData.sex == '1' or playerData.sex == 1)))
+    local initialSpawnSkin = skin
+    if isNewCharacter then
+        initialSpawnSkin = { sex = isFemale and 1 or 0 }
+    else
+        if not initialSpawnSkin or type(initialSpawnSkin) ~= 'table' or not initialSpawnSkin.sex then
+            initialSpawnSkin = { sex = 0 }
+        end
+    end
+
+    ESX.SpawnPlayer(initialSpawnSkin, spawnCoords, function()
         local playerPed = PlayerPedId()
         FreezeEntityPosition(playerPed, true)
         SetEntityVisible(playerPed, false, false)
         SetEntityCollision(playerPed, true, true)
         
-        if isNew or isSkinEmpty(skin) then
-            -- Force screen fade out during loading to prevent premature fade-ins from other scripts
-            local keepBlackCreator = true
-            CreateThread(function()
-                while keepBlackCreator do
-                    DoScreenFadeOut(0)
-                    Wait(0)
-                end
-            end)
-
-            -- Open skin creator for new characters (direct spawn)
-            Wait(500)
-            
-            -- Force reset model to default gender ped to prevent inheriting previous character's skin
-            local defaultModel = `mp_m_freemode_01`
-            local genderSex = 0
-            if playerData and (playerData.sex == 'f' or playerData.sex == '1' or playerData.sex == 1 or playerData.sex == 'F' or playerData.sex == 'FEMALE') then
-                defaultModel = `mp_f_freemode_01`
-                genderSex = 1
-            end
+        if isNewCharacter then
+            local defaultModel = isFemale and `mp_f_freemode_01` or `mp_m_freemode_01`
+            local genderSex = isFemale and 1 or 0
             
             RequestModel(defaultModel)
             while not HasModelLoaded(defaultModel) do Wait(10) end
@@ -503,8 +550,24 @@ AddEventHandler('esx:playerLoaded', function(playerData, isNew, skin)
             SetPedDefaultComponentVariation(PlayerPedId())
             SetModelAsNoLongerNeeded(defaultModel)
             
-            -- Reset skinchanger's internal cache with correct gender
-            TriggerEvent('skinchanger:loadSkin', {sex = genderSex})
+            -- Reset skinchanger's internal cache with complete clean gender presets
+            if genderSex == 1 then
+                TriggerEvent('skinchanger:loadSkin', {
+                    sex = 1,
+                    face_1 = 21, face_2 = 21, face_mix = 50,
+                    skin_1 = 21, skin_2 = 21, skin_mix = 50,
+                    hair_1 = 4, hair_color_1 = 0,
+                    tshirt_1 = 14, torso_1 = 14, pants_1 = 14, arms = 15, shoes_1 = 35
+                })
+            else
+                TriggerEvent('skinchanger:loadSkin', {
+                    sex = 0,
+                    face_1 = 0, face_2 = 0, face_mix = 50,
+                    skin_1 = 0, skin_2 = 0, skin_mix = 50,
+                    hair_1 = 1, hair_color_1 = 0,
+                    tshirt_1 = 15, torso_1 = 15, pants_1 = 1, arms = 15, shoes_1 = 1
+                })
+            end
             
             -- Re-evaluate playerPed after changing model
             playerPed = PlayerPedId()
@@ -515,44 +578,41 @@ AddEventHandler('esx:playerLoaded', function(playerData, isNew, skin)
             TriggerEvent('esx:onPlayerSpawn')
             TriggerEvent('esx:restoreLoadout')
             
-            Wait(1000)
+            Wait(300)
 
-            -- Stop forcing the screen black since we are ready to open the customization menu
-            keepBlackCreator = false
-            Wait(50)
-
-            -- Fade in since screen was faded out during selection
-            DoScreenFadeIn(800)
-            Wait(800)
+            -- Fade in the screen completely so the world and player ped are rendered
+            DoScreenFadeIn(600)
+            Wait(600)
             
-            -- Open appearance customization menu for fivem-appearance, illenium-appearance, or esx_skin
-            local opened = pcall(function()
-                exports['fivem-appearance']:startPlayerCustomization(function(appearance)
-                    if appearance then
-                        -- Appearance saved by export automatically
-                    end
-                end)
-            end)
-            if not opened then
-                opened = pcall(function()
-                    exports['illenium-appearance']:startPlayerCustomization(function(appearance)
+            -- Open appearance customization menu (MANDATORY for new characters)
+            CreateThread(function()
+                Wait(150)
+                if GetResourceState('bl_appearance') == 'started' then
+                    exports['bl_appearance']:startPlayerCustomization(function(appearance)
                         if appearance then
-                            -- Appearance saved by export automatically
+                            print("[bl_multicharacter] Skin appearance saved successfully!")
                         end
                     end)
-                end)
-            end
-            if not opened then
-                TriggerEvent('esx_skin:openSaveableMenu', function()
-                    if Config.Debug then
-                        print("Skin created!")
-                    end
-                end, function()
-                    if Config.Debug then
-                        print("Skin creation cancelled!")
-                    end
-                end)
-            end
+                elseif GetResourceState('fivem-appearance') == 'started' then
+                    exports['fivem-appearance']:startPlayerCustomization(function(appearance)
+                        if appearance then
+                            print("[bl_multicharacter] Skin appearance saved successfully!")
+                        end
+                    end)
+                elseif GetResourceState('illenium-appearance') == 'started' then
+                    exports['illenium-appearance']:startPlayerCustomization(function(appearance)
+                        if appearance then
+                            print("[bl_multicharacter] Skin appearance saved successfully!")
+                        end
+                    end)
+                else
+                    TriggerEvent('esx_skin:openSaveableMenu', function()
+                        print("[bl_multicharacter] Skin saved via esx_skin!")
+                    end, function()
+                        print("[bl_multicharacter] Skin creation cancelled!")
+                    end)
+                end
+            end)
         else
             -- Force screen fade out during loading to prevent premature fade-ins from other scripts (e.g. spawnmanager, HUDs)
             local keepBlack = true
@@ -657,7 +717,30 @@ AddEventHandler('esx:playerLoaded', function(playerData, isNew, skin)
             DestroyAllCams(true)
             
             FreezeEntityPosition(playerPed, false)
-            SetEntityInvincible(playerPed, false)
+            
+            -- Protection de Spawn & Mode Fantôme (4 secondes pour préserver le RP et éviter les collisions)
+            CreateThread(function()
+                local ped = PlayerPedId()
+                SetEntityInvincible(ped, true)
+                SetPlayerInvincible(PlayerId(), true)
+                SetEntityAlpha(ped, 140, false) -- Semi-transparent / fantôme
+                
+                local timerEnd = GetGameTimer() + 4000
+                while GetGameTimer() < timerEnd do
+                    SetEntityInvincible(ped, true)
+                    SetPlayerInvincible(PlayerId(), true)
+                    Wait(100)
+                end
+                
+                -- Transition fluide vers la visibilité normale
+                for a = 140, 255, 15 do
+                    SetEntityAlpha(ped, a, false)
+                    Wait(30)
+                end
+                ResetEntityAlpha(ped)
+                SetEntityInvincible(ped, false)
+                SetPlayerInvincible(PlayerId(), false)
+            end)
             
             -- Restore HUD elements
             TriggerEvent('chat:toggleChat', true)

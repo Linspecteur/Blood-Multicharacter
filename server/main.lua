@@ -2,7 +2,6 @@ local ESX = exports['es_extended']:getSharedObject()
 if ESX.GetConfig() then
     ESX.GetConfig().Multichar = true
 end
-local maxSlots = 4
 
 -- Helper to get player's primary identifier matching ESX config
 local function getPrimaryIdentifier(source)
@@ -18,53 +17,50 @@ local function getPrimaryIdentifier(source)
         end
     end
     
-    -- Second fallback to first identifier
     return GetPlayerIdentifiers(source)[1]
 end
-
 
 -- Phone column check state
 local phoneColumn = nil
 
 MySQL.ready(function()
-    -- Check phone number column in the users table
-    local checkPhone = MySQL.query.await("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'users' AND (COLUMN_NAME = 'phone_number' OR COLUMN_NAME = 'phone')")
-    if checkPhone and #checkPhone > 0 then
-        local hasPhoneNumber = false
-        local hasPhone = false
-        for _, col in ipairs(checkPhone) do
-            if col.COLUMN_NAME == 'phone_number' then
-                hasPhoneNumber = true
-            elseif col.COLUMN_NAME == 'phone' then
-                hasPhone = true
+    pcall(function()
+        local checkPhone = MySQL.query.await("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'users' AND (COLUMN_NAME = 'phone_number' OR COLUMN_NAME = 'phone')")
+        if checkPhone and #checkPhone > 0 then
+            local hasPhoneNumber = false
+            local hasPhone = false
+            for _, col in ipairs(checkPhone) do
+                if col.COLUMN_NAME == 'phone_number' then
+                    hasPhoneNumber = true
+                elseif col.COLUMN_NAME == 'phone' then
+                    hasPhone = true
+                end
             end
+            if hasPhoneNumber then
+                phoneColumn = 'phone_number'
+            elseif hasPhone then
+                phoneColumn = 'phone'
+            end
+            print(("^2[bl_multicharacter]^7 Colonne de tÃ©lÃ©phone dÃ©tectÃ©e : '%s'"):format(phoneColumn))
         end
-        if hasPhoneNumber then
-            phoneColumn = 'phone_number'
-        elseif hasPhone then
-            phoneColumn = 'phone'
-        end
-        print(("^2[bl_multicharacter]^7 Colonne de téléphone détectée : '%s'"):format(phoneColumn))
-    else
-        print("^1[bl_multicharacter]^7 Aucune colonne de téléphone ('phone_number' ou 'phone') trouvée dans 'users'.")
-    end
+    end)
 end)
 
 -- Internal function to format accounts
 local function parseAccounts(accountsStr)
     local accounts = {}
     if accountsStr and type(accountsStr) == 'string' then
-        accounts = json.decode(accountsStr) or {}
+        pcall(function()
+            accounts = json.decode(accountsStr) or {}
+        end)
+    elseif type(accountsStr) == 'table' then
+        accounts = accountsStr
     end
     
     local bank = 0
     local money = 0
-    if accounts.bank then
-        bank = accounts.bank
-    end
-    if accounts.money then
-        money = accounts.money
-    end
+    if accounts.bank then bank = accounts.bank end
+    if accounts.money then money = accounts.money end
     
     return money, bank
 end
@@ -78,43 +74,238 @@ local function generateSSN()
     return ssn
 end
 
--- Get characters for a player with self-healing DB migration
+-- Generate a formatted phone number (e.g. 555-4821)
+local function generatePhoneNumber()
+    local prefix = math.random(100, 999)
+    local suffix = math.random(1000, 9999)
+    return tostring(prefix) .. "-" .. tostring(suffix)
+end
+
+-- Comprehensive Multi-Source Resolver to check VIP and Staff status independently
+local function checkPlayerPermissions(src, primaryIdentifier, baseLicense)
+    if not src then return false, false end
+    
+    local allIdentifiers = GetPlayerIdentifiers(src) or {}
+    if primaryIdentifier and #allIdentifiers == 0 then
+        table.insert(allIdentifiers, primaryIdentifier)
+    end
+
+    local isStaff = false
+    local isVip = false
+    local staffGrade = nil
+    local vipGrade = nil
+
+    -- 1. Whitelists manuelles par licence Rockstar
+    for _, id in ipairs(allIdentifiers) do
+        if Config.StaffLicenses and Config.StaffLicenses[id] then
+            isStaff = true
+            staffGrade = "Config.StaffLicenses"
+        end
+        if Config.VIPLicenses and Config.VIPLicenses[id] then
+            isVip = true
+            vipGrade = "Config.VIPLicenses"
+        end
+    end
+
+    -- Extraction des hash/hex d'identifiants
+    local hexList = {}
+    if baseLicense then table.insert(hexList, baseLicense) end
+    for _, id in ipairs(allIdentifiers) do
+        local hex = string.match(id, "(%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x)")
+        if hex then table.insert(hexList, hex) end
+        local prefix, base = string.match(id, "^([^:]+:)(.+)$")
+        if base and #base > 6 then table.insert(hexList, base) end
+    end
+
+    -- Helper de validation de grades
+    local function isStaffGrade(grade)
+        if not grade then return false end
+        local gLow = tostring(grade):lower():gsub("%s+", "")
+        return (Config.StaffGrades and (Config.StaffGrades[gLow] or Config.StaffGrades[tostring(grade)])) or false
+    end
+
+    local function isVIPGrade(grade)
+        if not grade then return false end
+        local gLow = tostring(grade):lower():gsub("%s+", "")
+        return (Config.VIPGrades and (Config.VIPGrades[gLow] or Config.VIPGrades[tostring(grade)])) or false
+    end
+
+    -- 2. Vérification dans la table bl_staff (bl_admin)
+    for _, id in ipairs(allIdentifiers) do
+        local ok, staffQuery = pcall(function()
+            return MySQL.query.await("SELECT grade FROM bl_staff WHERE identifier = @id OR identifier LIKE @likeId", {
+                ['@id'] = id,
+                ['@likeId'] = '%' .. id .. '%'
+            })
+        end)
+        if ok and staffQuery and #staffQuery > 0 then
+            for _, row in ipairs(staffQuery) do
+                if isStaffGrade(row.grade) then
+                    isStaff = true
+                    staffGrade = row.grade
+                end
+                if isVIPGrade(row.grade) then
+                    isVip = true
+                    vipGrade = row.grade
+                end
+            end
+        end
+    end
+    
+    if not isStaff or not isVip then
+        for _, hex in ipairs(hexList) do
+            local ok, staffQuery = pcall(function()
+                return MySQL.query.await("SELECT grade FROM bl_staff WHERE identifier LIKE @likeHex", {
+                    ['@likeHex'] = '%' .. hex .. '%'
+                })
+            end)
+            if ok and staffQuery and #staffQuery > 0 then
+                for _, row in ipairs(staffQuery) do
+                    if isStaffGrade(row.grade) then
+                        isStaff = true
+                        staffGrade = row.grade
+                    end
+                    if isVIPGrade(row.grade) then
+                        isVip = true
+                        vipGrade = row.grade
+                    end
+                end
+            end
+        end
+    end
+
+    -- 3. Vérification via l'instance xPlayer active d'ESX
+    if ESX and ESX.GetPlayerFromId then
+        local xPlayer = ESX.GetPlayerFromId(src)
+        if xPlayer then
+            local group = xPlayer.getGroup and xPlayer.getGroup() or xPlayer.group
+            if isStaffGrade(group) then
+                isStaff = true
+                staffGrade = group
+            end
+            if isVIPGrade(group) then
+                isVip = true
+                vipGrade = group
+            end
+        end
+    end
+
+    -- 4. Vérification dans la table users d'ESX
+    if not isStaff or not isVip then
+        for _, hex in ipairs(hexList) do
+            local ok, userRows = pcall(function()
+                return MySQL.query.await("SELECT `group` FROM users WHERE identifier LIKE @likeHex", {
+                    ['@likeHex'] = '%' .. hex .. '%'
+                })
+            end)
+            if ok and userRows and #userRows > 0 then
+                for _, row in ipairs(userRows) do
+                    if isStaffGrade(row.group) then
+                        isStaff = true
+                        staffGrade = row.group
+                    end
+                    if isVIPGrade(row.group) then
+                        isVip = true
+                        vipGrade = row.group
+                    end
+                end
+            end
+        end
+    end
+
+    if not isStaff or not isVip then
+        for _, id in ipairs(allIdentifiers) do
+            local ok, userRows = pcall(function()
+                return MySQL.query.await("SELECT `group` FROM users WHERE identifier = @id OR identifier LIKE @likeId", {
+                    ['@id'] = id,
+                    ['@likeId'] = '%' .. id .. '%'
+                })
+            end)
+            if ok and userRows and #userRows > 0 then
+                for _, row in ipairs(userRows) do
+                    if isStaffGrade(row.group) then
+                        isStaff = true
+                        staffGrade = row.group
+                    end
+                    if isVIPGrade(row.group) then
+                        isVip = true
+                        vipGrade = row.group
+                    end
+                end
+            end
+        end
+    end
+
+    -- Le staff a automatiquement tous les privilèges VIP
+    if isStaff then
+        isVip = true
+    end
+
+    if isStaff then
+        print(("^2[bl_multicharacter]^7 Rôle STAFF accordé (Grade: %s) pour %s"):format(staffGrade or "staff", primaryIdentifier or "inconnu"))
+    elseif isVip then
+        print(("^2[bl_multicharacter]^7 Rôle VIP accordé (Grade: %s) pour %s"):format(vipGrade or "vip", primaryIdentifier or "inconnu"))
+    end
+
+    return isVip, isStaff
+end
+
+-- Get characters for a player with self-healing DB migration and VIP/Staff slot permission check
 ESX.RegisterServerCallback('bl_multicharacter:getCharacters', function(source, cb)
     local src = source
     local primaryIdentifier = getPrimaryIdentifier(src)
     
     if not primaryIdentifier then
-        cb({})
+        cb({}, {}, 0, false, false)
         return
     end
 
-    -- Put player in a unique routing bucket (virtual dimension) to hide them from other players
-    SetPlayerRoutingBucket(src, src)
+    -- Put player in a unique routing bucket (virtual dimension)
+    pcall(function() SetPlayerRoutingBucket(src, src) end)
 
     local baseLicense = string.gsub(primaryIdentifier, "^[^:]+:", "")
     local prefix, baseHex = string.match(primaryIdentifier, "^([^:]+:)(.+)$")
 
-    -- Check if player has custom slots in multicharacter_slots table
-    local playerMaxSlots = MySQL.scalar.await("SELECT slots FROM multicharacter_slots WHERE identifier = @identifier", {
-        ['@identifier'] = primaryIdentifier
-    })
-    
-    -- Query player's group from database to determine if staff or VIP
-    local userGroup = MySQL.scalar.await("SELECT `group` FROM users WHERE identifier LIKE @identifier", {
-        ['@identifier'] = '%' .. baseLicense .. '%'
-    }) or "user"
-    
-    local isStaffOrVip = false
-    if Config.StaffGroups[userGroup] or Config.VIPLicenses[primaryIdentifier] then
-        isStaffOrVip = true
+    -- Check player's VIP and Staff privileges
+    local isVip, isStaff = false, false
+    local ok, resVip, resStaff = pcall(checkPlayerPermissions, src, primaryIdentifier, baseLicense)
+    if ok then
+        isVip = resVip or false
+        isStaff = resStaff or false
     end
 
-    local allowedSlots = Config.DefaultSlots or 2
-    if isStaffOrVip then
-        allowedSlots = Config.MaxSlots or 4
-    end
-    if playerMaxSlots then
-        allowedSlots = tonumber(playerMaxSlots)
+    -- Build dynamic slots configuration state
+    local slotConfigs = {}
+    for i = 1, (Config.MaxSlots or 4) do
+        local slotData = Config.Slots and Config.Slots[i] or {}
+        local slotType = slotData.type
+        if not slotType then
+            if slotData.staffOnly or i == 4 then
+                slotType = 'staff'
+            elseif slotData.vipOnly or (i == 2 or i == 3) then
+                slotType = 'vip'
+            else
+                slotType = 'free'
+            end
+        end
+
+        local isLocked = false
+        if slotType == 'staff' then
+            if not isStaff then
+                isLocked = true
+            end
+        elseif slotType == 'vip' then
+            if not isVip and not isStaff then
+                isLocked = true
+            end
+        end
+
+        table.insert(slotConfigs, {
+            slot = i,
+            type = slotType,
+            isLocked = isLocked,
+            label = slotData.label or ("Emplacement " .. i)
+        })
     end
 
     local function formatPlaytime(seconds)
@@ -133,52 +324,67 @@ ESX.RegisterServerCallback('bl_multicharacter:getCharacters', function(source, c
     end
 
     local function proceedFetch()
-        -- Build SELECT dynamically to avoid query crashes if phone column does not exist
-        local querySelect = "SELECT identifier, firstname, lastname, job, job_grade, accounts, dateofbirth, sex, height, skin, playtime"
-        if phoneColumn then
-            querySelect = querySelect .. ", " .. phoneColumn
-        end
-        querySelect = querySelect .. " FROM users WHERE identifier LIKE @identifier"
-
-        local result = MySQL.query.await(querySelect, {
-            ['@identifier'] = '%' .. baseLicense .. '%'
-        })
-        
         local characters = {}
-        if result then
+        local success, result = pcall(function()
+            return MySQL.query.await("SELECT * FROM users WHERE identifier LIKE @identifier", {
+                ['@identifier'] = '%' .. baseLicense .. '%'
+            })
+        end)
+        
+        if success and result then
             for i, char in ipairs(result) do
                 local cash, bank = parseAccounts(char.accounts)
                 
-                -- Detect slot based on identifier (e.g. char1:license:...) or assume order
-                local slotStr = string.match(char.identifier, "char(%d+):")
+                local slotStr = string.match(char.identifier or "", "char(%d+):")
                 local slot = slotStr and tonumber(slotStr) or i
                 
-                -- Fetch job labels
-                local jobLabel = char.job
-                local gradeLabel = char.job_grade
-                if ESX.DoesJobExist(char.job, char.job_grade) then
-                    local jobObj = ESX.GetJobs()[char.job]
-                    jobLabel = jobObj.label
-                    gradeLabel = jobObj.grades[tostring(char.job_grade)].label
+                local jobLabel = char.job or "Sans emploi"
+                local gradeLabel = tostring(char.job_grade or "")
+                pcall(function()
+                    if ESX.DoesJobExist and ESX.DoesJobExist(char.job, char.job_grade) then
+                        local jobObj = ESX.GetJobs()[char.job]
+                        if jobObj then
+                            jobLabel = jobObj.label or jobLabel
+                            if jobObj.grades and jobObj.grades[tostring(char.job_grade)] then
+                                gradeLabel = jobObj.grades[tostring(char.job_grade)].label or gradeLabel
+                            end
+                        end
+                    end
+                end)
+
+                local phoneVal = nil
+                if phoneColumn and char[phoneColumn] and tostring(char[phoneColumn]) ~= "" and tostring(char[phoneColumn]) ~= "null" then
+                    phoneVal = tostring(char[phoneColumn])
+                elseif char.phone_number and tostring(char.phone_number) ~= "" and tostring(char.phone_number) ~= "null" then
+                    phoneVal = tostring(char.phone_number)
+                elseif char.phone and tostring(char.phone) ~= "" and tostring(char.phone) ~= "null" then
+                    phoneVal = tostring(char.phone)
                 end
 
-                -- Dynamic phone extraction
-                local phoneVal = "Non défini"
-                if phoneColumn and char[phoneColumn] then
-                    phoneVal = char[phoneColumn]
+                -- Auto-génération et persistance permanente si aucun numéro n'était défini
+                if not phoneVal or phoneVal == "" or phoneVal == "Non défini" or phoneVal == "null" then
+                    local newPhone = generatePhoneNumber()
+                    phoneVal = newPhone
+                    pcall(function()
+                        local colToUpdate = phoneColumn or 'phone_number'
+                        MySQL.update.await(("UPDATE users SET %s = @phone WHERE identifier = @ident"):format(colToUpdate), {
+                            ['@phone'] = newPhone,
+                            ['@ident'] = char.identifier
+                        })
+                    end)
                 end
 
                 table.insert(characters, {
                     id = slot,
                     identifier = char.identifier,
                     slot = slot,
-                    firstname = char.firstname or 'Unknown',
-                    lastname = char.lastname or 'Unknown',
-                    dateofbirth = char.dateofbirth or 'Unknown',
+                    firstname = char.firstname or 'Inconnu',
+                    lastname = char.lastname or '',
+                    dateofbirth = char.dateofbirth or '01/01/2000',
                     sex = char.sex or 'm',
                     height = char.height or 180,
-                    job = char.job,
-                    job_grade = char.job_grade,
+                    job = char.job or 'unemployed',
+                    job_grade = char.job_grade or 0,
                     jobLabel = jobLabel,
                     jobGradeLabel = gradeLabel,
                     money = cash,
@@ -189,47 +395,44 @@ ESX.RegisterServerCallback('bl_multicharacter:getCharacters', function(source, c
                 })
             end
         end
-        cb(characters, allowedSlots, #GetPlayers(), isStaffOrVip)
+        cb(characters, slotConfigs, #GetPlayers(), isVip, isStaff)
     end
 
     if prefix and baseHex then
-        local dbUsers = MySQL.query.await("SELECT identifier FROM users WHERE identifier LIKE @query", {
-            ['@query'] = '%:' .. baseHex
-        })
-        
-        if dbUsers and #dbUsers > 0 then
-            local migrateList = {}
-            for _, row in ipairs(dbUsers) do
-                local slot = string.match(row.identifier, "^char(%d+):")
-                if slot then
-                    local expectedIdentifier = "char" .. slot .. ":" .. primaryIdentifier
-                    if row.identifier ~= expectedIdentifier then
-                        table.insert(migrateList, { old = row.identifier, new = expectedIdentifier })
+        pcall(function()
+            local dbUsers = MySQL.query.await("SELECT identifier FROM users WHERE identifier LIKE @query", {
+                ['@query'] = '%:' .. baseHex
+            })
+            
+            if dbUsers and #dbUsers > 0 then
+                local migrateList = {}
+                for _, row in ipairs(dbUsers) do
+                    local slot = string.match(row.identifier or "", "^char(%d+):")
+                    if slot then
+                        local expectedIdentifier = "char" .. slot .. ":" .. primaryIdentifier
+                        if row.identifier ~= expectedIdentifier then
+                            table.insert(migrateList, { old = row.identifier, new = expectedIdentifier })
+                        end
+                    end
+                end
+                
+                if #migrateList > 0 then
+                    for _, mig in ipairs(migrateList) do
+                        print(("^2[bl_multicharacter]^7 Migration identifiant DB: %s -> %s"):format(mig.old, mig.new))
+                        MySQL.update.await("UPDATE users SET identifier = @new WHERE identifier = @old", {
+                            ['@new'] = mig.new,
+                            ['@old'] = mig.old
+                        })
                     end
                 end
             end
-            
-            if #migrateList == 0 then
-                proceedFetch()
-            else
-                for _, mig in ipairs(migrateList) do
-                    print(("^2[bl_multicharacter]^7 Migrating character database record from %s to %s"):format(mig.old, mig.new))
-                    MySQL.update.await("UPDATE users SET identifier = @new WHERE identifier = @old", {
-                        ['@new'] = mig.new,
-                        ['@old'] = mig.old
-                    })
-                end
-                proceedFetch()
-            end
-        else
-            proceedFetch()
-        end
-    else
-        proceedFetch()
+        end)
     end
+
+    proceedFetch()
 end)
 
--- Create a new character
+-- Create a new character with server-side VIP and Staff validation
 RegisterNetEvent('bl_multicharacter:createCharacter')
 AddEventHandler('bl_multicharacter:createCharacter', function(data)
     local src = source
@@ -237,23 +440,39 @@ AddEventHandler('bl_multicharacter:createCharacter', function(data)
     
     if not license then return end
     
-    local newIdentifier = "char" .. data.slot .. ":" .. license
+    local slotNum = tonumber(data.slot) or 1
+    local baseLicense = string.gsub(license, "^[^:]+:", "")
+    
+    -- Security verification: Check slot type against player permissions
+    local slotData = Config.Slots and Config.Slots[slotNum] or {}
+    local slotType = slotData.type or (slotNum == 4 and 'staff' or ((slotNum == 2 or slotNum == 3) and 'vip' or 'free'))
+    local isVip, isStaff = checkPlayerPermissions(src, license, baseLicense)
+    
+    if slotType == 'staff' and not isStaff then
+        TriggerClientEvent('esx:showNotification', src, "Cet emplacement est strictement réservé au STAFF !")
+        return
+    elseif slotType == 'vip' and not isVip and not isStaff then
+        TriggerClientEvent('esx:showNotification', src, "Cet emplacement est réservé aux membres VIP / Staff !")
+        return
+    end
 
-    -- Basic check to prevent overwrite
+    local newIdentifier = "char" .. slotNum .. ":" .. license
+
     local exists = MySQL.scalar.await("SELECT 1 FROM users WHERE identifier = @identifier", {
         ['@identifier'] = newIdentifier
     })
     
     if exists then
-        TriggerClientEvent('esx:showNotification', src, "Slot already taken!")
+        TriggerClientEvent('esx:showNotification', src, "Cet emplacement est déjà utilisé !")
         return
     end
     
-    -- Insert into DB
-    local accounts = json.encode({bank = 50000, money = 1000}) -- default starting bank and cash
+    local accounts = json.encode({bank = 50000, money = 1000})
     local ssn = generateSSN()
+    local phoneNumber = generatePhoneNumber()
     
-    MySQL.insert.await('INSERT INTO users (identifier, firstname, lastname, dateofbirth, sex, height, accounts, ssn) VALUES (@identifier, @firstname, @lastname, @dob, @sex, @height, @accounts, @ssn)', {
+    local insertQuery = 'INSERT INTO users (identifier, firstname, lastname, dateofbirth, sex, height, accounts, ssn) VALUES (@identifier, @firstname, @lastname, @dob, @sex, @height, @accounts, @ssn)'
+    local insertParams = {
         ['@identifier'] = newIdentifier,
         ['@firstname'] = data.firstname,
         ['@lastname'] = data.lastname,
@@ -262,32 +481,64 @@ AddEventHandler('bl_multicharacter:createCharacter', function(data)
         ['@height'] = data.height,
         ['@accounts'] = accounts,
         ['@ssn'] = ssn
-    })
-    
-    TriggerClientEvent('esx:showNotification', src, "Character created successfully!")
-    TriggerClientEvent('bl_multicharacter:setupCharacters', src)
+    }
+
+    if phoneColumn then
+        insertQuery = ('INSERT INTO users (identifier, firstname, lastname, dateofbirth, sex, height, accounts, ssn, %s) VALUES (@identifier, @firstname, @lastname, @dob, @sex, @height, @accounts, @ssn, @phone)'):format(phoneColumn)
+        insertParams['@phone'] = phoneNumber
+    end
+
+    MySQL.insert.await(insertQuery, insertParams)
+
+    print(("^2[bl_multicharacter]^7 Nouveau personnage créé pour %s (Slot %d, SSN: %s, Tel: %s)"):format(newIdentifier, slotNum, ssn, phoneNumber))
+
+    SetPlayerRoutingBucket(src, 0)
+    TriggerEvent('esx:onPlayerJoined', src, "char" .. slotNum)
+
+    if ESX.Players and license then
+        ESX.Players[license] = "char" .. slotNum
+    end
 end)
 
--- Delete a character
+-- Delete character with full multi-table cascade
 RegisterNetEvent('bl_multicharacter:deleteCharacter')
 AddEventHandler('bl_multicharacter:deleteCharacter', function(charId)
     local src = source
     local license = getPrimaryIdentifier(src)
-    
     if not license then return end
-    
-    -- Reconstruct the full identifier to delete since UI now passes the slot integer
-    local fullIdentifier = "char" .. tostring(charId) .. ":" .. license
-    
-    MySQL.update.await('DELETE FROM users WHERE identifier = @identifier', {
-        ['@identifier'] = fullIdentifier
-    })
-    
-    TriggerClientEvent('esx:showNotification', src, "Character deleted.")
+
+    local slotNum = tonumber(charId) or 1
+    local targetIdentifier = "char" .. slotNum .. ":" .. license
+
+    -- Comprehensive list of tables to clean on character deletion
+    local tablesToClean = {
+        { table = 'users', column = 'identifier' },
+        { table = 'user_accounts', column = 'identifier' },
+        { table = 'user_inventory', column = 'identifier' },
+        { table = 'user_licenses', column = 'owner' },
+        { table = 'owned_vehicles', column = 'owner' },
+        { table = 'ox_inventory', column = 'owner' },
+        { table = 'billing', column = 'identifier' },
+        { table = 'addon_account_data', column = 'owner' },
+        { table = 'addon_inventory_items', column = 'owner' },
+        { table = 'datastore_data', column = 'owner' },
+        { table = 'bl_properties', column = 'owner' },
+        { table = 'bl_keys', column = 'owner' }
+    }
+
+    for _, target in ipairs(tablesToClean) do
+        pcall(function()
+            MySQL.query.await(("DELETE FROM %s WHERE %s = @ident"):format(target.table, target.column), {
+                ['@ident'] = targetIdentifier
+            })
+        end)
+    end
+
+    print(("^1[bl_multicharacter]^7 Personnage supprimÃ©: %s"):format(targetIdentifier))
     TriggerClientEvent('bl_multicharacter:setupCharacters', src)
 end)
 
--- Relog command handler
+-- Relog handling
 local relogCooldowns = {}
 
 RegisterNetEvent('bl_multicharacter:relog')
@@ -298,20 +549,10 @@ AddEventHandler('bl_multicharacter:relog', function()
     if xPlayer then
         local license = getPrimaryIdentifier(src)
         if license then
-            local userGroup = "user"
-            if xPlayer.getGroup then
-                userGroup = xPlayer.getGroup()
-            elseif xPlayer.group then
-                userGroup = xPlayer.group
-            end
+            local baseLicense = string.gsub(license, "^[^:]+:", "")
+            local isVip, isStaff = checkPlayerPermissions(src, license, baseLicense)
             
-            -- Check if player is Staff or VIP
-            local isStaffOrVip = false
-            if Config.StaffGroups[userGroup] or Config.VIPLicenses[license] then
-                isStaffOrVip = true
-            end
-            
-            if not isStaffOrVip then
+            if not isVip and not isStaff then
                 local now = os.time()
                 local cooldown = Config.RelogCooldown or 600
                 if relogCooldowns[license] and (now - relogCooldowns[license]) < cooldown then
@@ -331,10 +572,7 @@ AddEventHandler('bl_multicharacter:relog', function()
             end
         end
         
-        -- Put player in a unique routing bucket (virtual dimension) to hide them from other players
         SetPlayerRoutingBucket(src, src)
-        
-        -- This will trigger esx:onPlayerLogout on the client
         TriggerEvent('esx:playerLogout', src)
     end
 end)
@@ -346,88 +584,66 @@ AddEventHandler('bl_multicharacter:playCharacter', function(charId)
     local charPrefix = "char" .. tostring(charId)
     local primaryIdentifier = getPrimaryIdentifier(src)
     
-    -- Reset player's routing bucket to the default dimension (0) before spawning them in the game
     SetPlayerRoutingBucket(src, 0)
-
-    -- Trigger the player joined event first, so ESX can load the character prefix correctly
     TriggerEvent('esx:onPlayerJoined', src, charPrefix)
     
-    -- Cache the prefix in ESX.Players after joining
     if ESX.Players and primaryIdentifier then
         ESX.Players[primaryIdentifier] = charPrefix
     end
 end)
 
--- =========================================================================
---            AUTOMATIC PLAYTIME TRACKING & SELF-HEALING DATABASE
--- =========================================================================
-
--- Self-healing database: Automatically add the 'playtime' column if it's missing in 'users'
+-- Playtime tracking
 MySQL.ready(function()
-    local check = MySQL.query.await("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'users' AND COLUMN_NAME = 'playtime'")
-    if not check or #check == 0 then
-        print("^2[bl_multicharacter]^7 Colonne 'playtime' introuvable dans 'users'. Ajout automatique en cours...")
-        local success = pcall(function()
+    pcall(function()
+        local check = MySQL.query.await("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'users' AND COLUMN_NAME = 'playtime'")
+        if not check or #check == 0 then
             MySQL.query.await("ALTER TABLE users ADD COLUMN playtime INT DEFAULT 0")
-        end)
-        if success then
-            print("^2[bl_multicharacter]^7 Colonne 'playtime' ajoutée avec succès !")
-        else
-            print("^1[bl_multicharacter]^7 Erreur lors de l'ajout de la colonne 'playtime' !")
         end
-    end
+    end)
 end)
 
--- Session tracking for online players (SourceId -> LoginTimestamp)
 local activePlaytimes = {}
 
--- Track session start when a player loaded a character successfully
 RegisterNetEvent('esx:playerLoaded')
 AddEventHandler('esx:playerLoaded', function(playerId, xPlayer)
     activePlaytimes[playerId] = os.time()
 end)
 
--- Helper to flush accumulated playtime for a single player to the database
 local function savePlayerPlaytime(playerId)
     if activePlaytimes[playerId] then
         local now = os.time()
         local elapsed = now - activePlaytimes[playerId]
-        activePlaytimes[playerId] = now -- Reset baseline for the next interval
+        activePlaytimes[playerId] = now
         
         local xPlayer = ESX.GetPlayerFromId(playerId)
         if xPlayer and elapsed > 0 then
-            MySQL.update("UPDATE users SET playtime = playtime + @time WHERE identifier = @identifier", {
-                ['@time'] = elapsed,
-                ['@identifier'] = xPlayer.identifier
-            })
+            pcall(function()
+                MySQL.update("UPDATE users SET playtime = playtime + @time WHERE identifier = @identifier", {
+                    ['@time'] = elapsed,
+                    ['@identifier'] = xPlayer.identifier
+                })
+            end)
         end
     end
 end
 
--- Track session end when player logs out cleanly
 RegisterNetEvent('esx:playerLogout')
 AddEventHandler('esx:playerLogout', function(playerId)
     savePlayerPlaytime(playerId)
     activePlaytimes[playerId] = nil
 end)
 
--- Track session end if player drops out/disconnects
 AddEventHandler('playerDropped', function()
     local src = source
     savePlayerPlaytime(src)
     activePlaytimes[src] = nil
 end)
 
--- Background thread: Periodically flush playtime every 60 seconds to prevent data loss on crashes
 CreateThread(function()
     while true do
-        Wait(60000) -- Flush playtime to DB every minute
+        Wait(60000)
         for playerId, _ in pairs(activePlaytimes) do
             savePlayerPlaytime(playerId)
         end
     end
 end)
-
-
-
-

@@ -59,7 +59,10 @@
                 <!-- State: Existing Character Information -->
                 <div id="info-content" class="content-block">
                     <div class="info-header">
-                        <div class="job-badge" id="char-job">CHÔMEUR</div>
+                        <div class="header-badges-row">
+                            <div class="job-badge" id="char-job">CHÔMEUR</div>
+                            <div id="char-tier-badge"></div>
+                        </div>
                         <h2 class="name-display" id="char-name">Prénom Nom</h2>
                     </div>
 
@@ -121,26 +124,31 @@
 
                 <!-- State: Empty slot clicked, options to create -->
                 <div id="create-content" class="content-block">
-                    <div class="create-illustration">
+                    <div class="create-illustration" id="create-illustration">
                         <i class="fa-solid fa-user-astronaut"></i>
                     </div>
-                    <h2>INDEX VIDE</h2>
-                    <p>Aucune donnée d'identité enregistrée sur cet emplacement de citoyen.</p>
+                    <div id="create-tier-badge" class="mb-2"></div>
+                    <h2 id="create-title">INDEX VIDE</h2>
+                    <p id="create-desc">Aucune donnée d'identité enregistrée sur cet emplacement de citoyen.</p>
                     
                     <button class="btn btn-primary mt-4" id="btn-create">
                         <span class="btn-glow"></span>
-                        <span class="btn-text">COMMENCER LA CREATION</span>
+                        <span class="btn-text">COMMENCER LA CRÉATION</span>
                     </button>
                 </div>
 
-                <!-- State: Locked slot details -->
+                <!-- State: Locked VIP / Staff slot details -->
                 <div id="locked-content" class="content-block" style="text-align: center; align-items: center; padding: 0 20px;">
-                    <div class="create-illustration" style="color: var(--accent);">
-                        <i class="fa-solid fa-shield-halved"></i>
+                    <div class="create-illustration" id="locked-illustration">
+                        <i class="fa-solid fa-crown" id="locked-icon"></i>
                     </div>
-                    <h2>ACCÈS RESTREINT</h2>
-                    <p style="font-size: 13px; line-height: 1.6; color: var(--text-secondary); font-weight: 300;">Cet emplacement de citoyen est actuellement réservé aux membres de l'équipe du Staff.</p>
-                    <p class="mt-4" style="font-size: 11px; color: var(--text-muted); font-weight: 300;">Note : La fonctionnalité d'emplacements VIP est actuellement en cours de développement.</p>
+                    <div id="locked-tier-pill" class="locked-tier-pill">ACCÈS VERROUILLÉ</div>
+                    <h2 id="locked-title">EMPLACEMENT VIP</h2>
+                    <p id="locked-desc" style="font-size: 13px; line-height: 1.6; color: var(--text-secondary); font-weight: 300;">Cet emplacement de citoyen est réservé aux membres VIP du serveur.</p>
+                    <div class="locked-info-card mt-4" id="locked-card">
+                        <i class="fa-solid fa-shield-halved" id="locked-card-icon"></i>
+                        <span id="locked-card-text">Vérification de grade automatique (bl_admin & ESX)</span>
+                    </div>
                 </div>
 
                 <!-- State: Citizen Registration Form -->

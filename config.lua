@@ -3,29 +3,70 @@ Config = {}
 -- Activer le mode débogage pour afficher les logs dans la console
 Config.Debug = false
 
-Config.DefaultSlots = 2 -- Default slot count for regular players
-Config.MaxSlots = 4     -- Max slot count possible for staff / VIPs
-
--- ESX Groups that unlock all character slots (Config.MaxSlots)
-Config.StaffGroups = {
-    ['admin'] = true,
-    ['superadmin'] = true,
-    ['boss'] = true
+-- =========================================================================
+--             CONFIGURATION DES EMPLACEMENTS DE PERSONNAGES (SLOTS)
+-- =========================================================================
+-- type = 'free'  : Accessible gratuitement à tous les joueurs.
+-- type = 'vip'   : Réservé aux membres VIP et au Staff.
+-- type = 'staff' : Strictement réservé aux membres du Staff / Administration.
+Config.Slots = {
+    [1] = { type = 'free',  label = "Emplacement 1" },
+    [2] = { type = 'vip',   label = "Emplacement 2 (VIP)" },
+    [3] = { type = 'vip',   label = "Emplacement 3 (VIP)" },
+    [4] = { type = 'staff', label = "Emplacement 4 (STAFF)" }
 }
 
--- Specific player licenses (Rockstar licenses) that unlock all character slots
+-- Nombre de slots maximum gérés
+Config.MaxSlots = 4
+
+-- =========================================================================
+--             GRADES AUTORISÉS POUR LES EMPLACEMENTS VIP (Slots 2 & 3)
+-- =========================================================================
+Config.VIPGrades = {
+    ['vip'] = true,
+    ['vip_gold'] = true,
+    ['vip_diamond'] = true,
+    ['vip_platine'] = true,
+    ['premium'] = true,
+    ['donateur'] = true
+}
+
+-- =========================================================================
+--         GRADES AUTORISÉS POUR L'EMPLACEMENT STAFF (Slot 4) & VIP
+-- =========================================================================
+-- Vérifié via bl_admin (table 'bl_staff' -> colonne 'grade') ou ESX ('group')
+Config.StaffGrades = {
+    ['mod'] = true,
+    ['moderateur'] = true,
+    ['admin'] = true,
+    ['superadmin'] = true,
+    ['gerant'] = true,
+    ['fondateur'] = true,
+    ['owner'] = true,
+    ['boss'] = true,
+    ['responsable'] = true,
+    ['staff'] = true,
+    ['developpeur'] = true,
+    ['dev'] = true
+}
+
+-- Whitelists manuelles par licence Rockstar (Rockstar License)
 Config.VIPLicenses = {
     -- ["license:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"] = true
 }
 
--- Selection ped coordinates and heading (Legion Square)
+Config.StaffLicenses = {
+    -- ["license:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"] = true
+}
+
+-- Coordonnées et orientation du ped de sélection (Legion Square)
 Config.PedCoords = vector4(194.14, -889.02, 32.12, 270.0)
 
--- Locations available in the Spawn Selector
+-- Emplacements disponibles dans le sélecteur de spawn
 Config.Spawns = {
     {
         name = "Dernière Position",
-        coords = nil, -- uses player's database last coords
+        coords = nil,
         icon = "fa-solid fa-location-dot",
         description = "Réapparaître là où vous étiez lors de votre dernière déconnexion."
     },
@@ -59,6 +100,5 @@ Config.Spawns = {
     }
 }
 
--- Temps de rechargement (en secondes) requis entre chaque changement de personnage (/mc) pour éviter l'abus de téléportation/spawn
+-- Temps de rechargement (en secondes) requis entre chaque changement de personnage (/mc)
 Config.RelogCooldown = 600
-
