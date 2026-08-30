@@ -98,11 +98,12 @@ Config.StaffGrades = {
 ## 🚀 Installation
 
 1. Placez le dossier `bl_multicharacter` dans votre répertoire de ressources.
-2. Ajoutez dans votre `server.cfg` :
+2. *(Optionnel / Recommandé)* Exécutez le fichier [bl_multicharacter.sql](file:///c:/Users/natha/Desktop/BloodLeak%20v2/bl_multicharacter/bl_multicharacter.sql) dans votre base de données pour ajouter les colonnes `phone_number` et `ssn` à la table `users`.
+3. Ajoutez dans votre `server.cfg` :
    ```cfg
    ensure bl_multicharacter
    ```
-3. Démarrez votre serveur.
+4. Démarrez votre serveur.
 
 ---
 
