@@ -1,7 +1,6 @@
 local ESX = exports['es_extended']:getSharedObject()
-if ESX.GetConfig() then
-    ESX.GetConfig().Multichar = true
-end
+-- Note : modifier ESX.GetConfig().Multichar ici n'a aucun effet (l'export renvoie une copie).
+-- Config.Multichar doit être activé directement dans la config d'es_extended (voir README).
 local cam = nil
 local previewPed = nil
 local isUIVisible = false
@@ -400,6 +399,8 @@ RegisterNUICallback('previewEmpty', function(data, cb)
 end)
 
 local chosenSpawnCoords = nil
+-- true uniquement quand le chargement ESX a été demandé par ce menu (jouer / créer)
+local awaitingCharacterLoad = false
 
 RegisterNUICallback('playCharacter', function(data, cb)
     local charId = data.charId
@@ -419,6 +420,7 @@ RegisterNUICallback('playCharacter', function(data, cb)
     originalSkin = nil
     
     -- Trigger our custom server event to handle safe logout and login!
+    awaitingCharacterLoad = true
     TriggerServerEvent('bl_multicharacter:playCharacter', charId)
     cb('ok')
 end)
@@ -440,8 +442,18 @@ RegisterNUICallback('createCharacter', function(data, cb)
     SendNUIMessage({ action = "closeUI" })
     originalSkin = nil
 
+    awaitingCharacterLoad = true
     TriggerServerEvent('bl_multicharacter:createCharacter', data)
     cb('ok')
+end)
+
+-- Le serveur a refusé la création ou le chargement : on rouvre le menu au lieu de rester sur un écran noir
+RegisterNetEvent('bl_multicharacter:actionFailed')
+AddEventHandler('bl_multicharacter:actionFailed', function()
+    awaitingCharacterLoad = false
+    isCreatingNewChar = false
+    chosenSpawnCoords = nil
+    openMulticharacterUI(false)
 end)
 
 RegisterNUICallback('deleteCharacter', function(data, cb)
@@ -476,6 +488,14 @@ end
 -- Handle Player Loaded to actually spawn the player into the world
 RegisterNetEvent('esx:playerLoaded')
 AddEventHandler('esx:playerLoaded', function(playerData, isNew, skin)
+    -- ESX a chargé le joueur sans passer par le menu (Config.Multichar désactivé dans es_extended) :
+    -- on ne spawn pas et on n'ouvre pas le menu d'apparence, sinon le joueur ne peut jamais créer son personnage.
+    if not awaitingCharacterLoad then
+        print("^1[bl_multicharacter]^7 esx:playerLoaded reçu sans sélection de personnage. Activez Config.Multichar = true dans la config d'es_extended (voir README).")
+        return
+    end
+    awaitingCharacterLoad = false
+
     local spawnCoords = nil
     local isNewCharacter = isCreatingNewChar or isNew or isSkinEmpty(skin)
     isCreatingNewChar = false

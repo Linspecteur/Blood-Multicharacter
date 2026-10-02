@@ -1,7 +1,18 @@
 local ESX = exports['es_extended']:getSharedObject()
-if ESX.GetConfig() then
-    ESX.GetConfig().Multichar = true
-end
+
+-- Vérifie au démarrage qu'es_extended tourne en mode multicharacter.
+-- Sans ça, ESX charge le joueur tout seul à la connexion et ouvre le menu d'apparence
+-- avant que le joueur ait pu créer son premier personnage.
+CreateThread(function()
+    local esxConfig = ESX.GetConfig and ESX.GetConfig() or {}
+    if not esxConfig.Multichar then
+        print("^1[bl_multicharacter] ==================================================================^7")
+        print("^1[bl_multicharacter] Config.Multichar est désactivé dans es_extended !^7")
+        print("^1[bl_multicharacter] Les joueurs ne pourront pas créer leur personnage.^7")
+        print("^1[bl_multicharacter] Mettez Config.Multichar = true dans la config d'es_extended puis redémarrez le serveur.^7")
+        print("^1[bl_multicharacter] ==================================================================^7")
+    end
+end)
 
 -- Helper to get player's primary identifier matching ESX config
 local function getPrimaryIdentifier(source)
@@ -41,7 +52,7 @@ MySQL.ready(function()
             elseif hasPhone then
                 phoneColumn = 'phone'
             end
-            print(("^2[bl_multicharacter]^7 Colonne de tÃ©lÃ©phone dÃ©tectÃ©e : '%s'"):format(phoneColumn))
+            print(("^2[bl_multicharacter]^7 Colonne de téléphone détectée : '%s'"):format(phoneColumn))
         end
     end)
 end)
@@ -79,6 +90,61 @@ local function generatePhoneNumber()
     local prefix = math.random(100, 999)
     local suffix = math.random(1000, 9999)
     return tostring(prefix) .. "-" .. tostring(suffix)
+end
+
+-- Un slot n'est valide que s'il est un entier entre 1 et Config.MaxSlots
+local function getValidSlot(value)
+    local slot = tonumber(value)
+    if not slot or slot ~= math.floor(slot) then return nil end
+    if slot < 1 or slot > (Config.MaxSlots or 4) then return nil end
+    return slot
+end
+
+local function getSlotType(slotNum)
+    local slotData = Config.Slots and Config.Slots[slotNum] or {}
+    return slotData.type or (slotNum == 4 and 'staff' or ((slotNum == 2 or slotNum == 3) and 'vip' or 'free'))
+end
+
+-- Nom / prénom : 2 à 32 octets, sans chiffres, balises ni caractères spéciaux
+local function sanitizeName(value)
+    if type(value) ~= 'string' then return nil end
+    value = value:gsub("^%s+", ""):gsub("%s+$", "")
+    if #value < 2 or #value > 32 then return nil end
+    if value:find("[%d%c<>\"`{}%[%]\\;=%%]") then return nil end
+    return value
+end
+
+-- Date de naissance au format JJ/MM/AAAA
+local function sanitizeDateOfBirth(value)
+    if type(value) ~= 'string' then return nil end
+    local day, month, year = value:match("^(%d%d)/(%d%d)/(%d%d%d%d)$")
+    day, month, year = tonumber(day), tonumber(month), tonumber(year)
+    if not day or day < 1 or day > 31 or month < 1 or month > 12 or year < 1900 or year > 2015 then
+        return nil
+    end
+    return value
+end
+
+local function sanitizeCharacterData(data)
+    if type(data) ~= 'table' then return nil end
+    local height = tonumber(data.height)
+    local character = {
+        firstname = sanitizeName(data.firstname),
+        lastname = sanitizeName(data.lastname),
+        dateofbirth = sanitizeDateOfBirth(data.dateofbirth),
+        sex = (data.sex == 'm' or data.sex == 'f') and data.sex or nil,
+        height = (height and height >= 140 and height <= 220) and math.floor(height) or nil
+    }
+    if not (character.firstname and character.lastname and character.dateofbirth and character.sex and character.height) then
+        return nil
+    end
+    return character
+end
+
+-- Rouvre le menu côté client quand le serveur refuse une action (évite l'écran noir)
+local function rejectAction(src, message)
+    TriggerClientEvent('esx:showNotification', src, message)
+    TriggerClientEvent('bl_multicharacter:actionFailed', src)
 end
 
 -- Comprehensive Multi-Source Resolver to check VIP and Staff status independently
@@ -332,12 +398,22 @@ ESX.RegisterServerCallback('bl_multicharacter:getCharacters', function(source, c
         end)
         
         if success and result then
-            for i, char in ipairs(result) do
+            -- On ignore les lignes sans préfixe charN: (ex. une ligne "license:xxx" créée par ESX
+            -- quand Config.Multichar était désactivé) : elles s'afficheraient en "Inconnu" et ne sont pas jouables
+            local slotRows = {}
+            for _, row in ipairs(result) do
+                local slotStr = string.match(row.identifier or "", "^char(%d+):")
+                if slotStr then
+                    row._slot = tonumber(slotStr)
+                    table.insert(slotRows, row)
+                end
+            end
+
+            for _, char in ipairs(slotRows) do
                 local cash, bank = parseAccounts(char.accounts)
-                
-                local slotStr = string.match(char.identifier or "", "char(%d+):")
-                local slot = slotStr and tonumber(slotStr) or i
-                
+
+                local slot = char._slot
+
                 local jobLabel = char.job or "Sans emploi"
                 local gradeLabel = tostring(char.job_grade or "")
                 pcall(function()
@@ -440,19 +516,29 @@ AddEventHandler('bl_multicharacter:createCharacter', function(data)
     
     if not license then return end
     
-    local slotNum = tonumber(data.slot) or 1
+    local slotNum = getValidSlot(type(data) == 'table' and data.slot)
+    if not slotNum then
+        rejectAction(src, "Emplacement invalide.")
+        return
+    end
+
+    local character = sanitizeCharacterData(data)
+    if not character then
+        rejectAction(src, "Informations du personnage invalides.")
+        return
+    end
+
     local baseLicense = string.gsub(license, "^[^:]+:", "")
-    
+
     -- Security verification: Check slot type against player permissions
-    local slotData = Config.Slots and Config.Slots[slotNum] or {}
-    local slotType = slotData.type or (slotNum == 4 and 'staff' or ((slotNum == 2 or slotNum == 3) and 'vip' or 'free'))
+    local slotType = getSlotType(slotNum)
     local isVip, isStaff = checkPlayerPermissions(src, license, baseLicense)
-    
+
     if slotType == 'staff' and not isStaff then
-        TriggerClientEvent('esx:showNotification', src, "Cet emplacement est strictement réservé au STAFF !")
+        rejectAction(src, "Cet emplacement est strictement réservé au STAFF !")
         return
     elseif slotType == 'vip' and not isVip and not isStaff then
-        TriggerClientEvent('esx:showNotification', src, "Cet emplacement est réservé aux membres VIP / Staff !")
+        rejectAction(src, "Cet emplacement est réservé aux membres VIP / Staff !")
         return
     end
 
@@ -463,22 +549,23 @@ AddEventHandler('bl_multicharacter:createCharacter', function(data)
     })
     
     if exists then
-        TriggerClientEvent('esx:showNotification', src, "Cet emplacement est déjà utilisé !")
+        rejectAction(src, "Cet emplacement est déjà utilisé !")
         return
     end
-    
-    local accounts = json.encode({bank = 50000, money = 1000})
+
+    local startingMoney = Config.StartingMoney or {}
+    local accounts = json.encode({bank = startingMoney.bank or 50000, money = startingMoney.money or 1000})
     local ssn = generateSSN()
     local phoneNumber = generatePhoneNumber()
     
     local insertQuery = 'INSERT INTO users (identifier, firstname, lastname, dateofbirth, sex, height, accounts, ssn) VALUES (@identifier, @firstname, @lastname, @dob, @sex, @height, @accounts, @ssn)'
     local insertParams = {
         ['@identifier'] = newIdentifier,
-        ['@firstname'] = data.firstname,
-        ['@lastname'] = data.lastname,
-        ['@dob'] = data.dateofbirth,
-        ['@sex'] = data.sex,
-        ['@height'] = data.height,
+        ['@firstname'] = character.firstname,
+        ['@lastname'] = character.lastname,
+        ['@dob'] = character.dateofbirth,
+        ['@sex'] = character.sex,
+        ['@height'] = character.height,
         ['@accounts'] = accounts,
         ['@ssn'] = ssn
     }
@@ -507,7 +594,13 @@ AddEventHandler('bl_multicharacter:deleteCharacter', function(charId)
     local license = getPrimaryIdentifier(src)
     if not license then return end
 
-    local slotNum = tonumber(charId) or 1
+    local slotNum = getValidSlot(charId)
+    if not slotNum then return end
+
+    -- Impossible de supprimer un personnage pendant qu'on le joue
+    local xPlayer = ESX.GetPlayerFromId(src)
+    if xPlayer then return end
+
     local targetIdentifier = "char" .. slotNum .. ":" .. license
 
     -- Comprehensive list of tables to clean on character deletion
@@ -534,7 +627,7 @@ AddEventHandler('bl_multicharacter:deleteCharacter', function(charId)
         end)
     end
 
-    print(("^1[bl_multicharacter]^7 Personnage supprimÃ©: %s"):format(targetIdentifier))
+    print(("^1[bl_multicharacter]^7 Personnage supprimé: %s"):format(targetIdentifier))
     TriggerClientEvent('bl_multicharacter:setupCharacters', src)
 end)
 
@@ -581,9 +674,37 @@ end)
 RegisterNetEvent('bl_multicharacter:playCharacter')
 AddEventHandler('bl_multicharacter:playCharacter', function(charId)
     local src = source
-    local charPrefix = "char" .. tostring(charId)
     local primaryIdentifier = getPrimaryIdentifier(src)
-    
+    local slotNum = getValidSlot(charId)
+    if not primaryIdentifier or not slotNum then
+        rejectAction(src, "Emplacement invalide.")
+        return
+    end
+
+    -- Déjà connecté sur un personnage : on ignore (évite un double chargement)
+    if ESX.GetPlayerFromId(src) then return end
+
+    -- Le personnage doit exister : sinon ESX en créerait un vide et contournerait la création
+    local charPrefix = "char" .. slotNum
+    local exists = MySQL.scalar.await("SELECT 1 FROM users WHERE identifier = @identifier", {
+        ['@identifier'] = charPrefix .. ":" .. primaryIdentifier
+    })
+    if not exists then
+        rejectAction(src, "Ce personnage n'existe pas.")
+        return
+    end
+
+    -- Un ancien personnage VIP / Staff reste jouable seulement si le joueur a toujours le grade
+    local slotType = getSlotType(slotNum)
+    if slotType ~= 'free' then
+        local baseLicense = string.gsub(primaryIdentifier, "^[^:]+:", "")
+        local isVip, isStaff = checkPlayerPermissions(src, primaryIdentifier, baseLicense)
+        if (slotType == 'staff' and not isStaff) or (slotType == 'vip' and not isVip) then
+            rejectAction(src, "Cet emplacement est verrouillé.")
+            return
+        end
+    end
+
     SetPlayerRoutingBucket(src, 0)
     TriggerEvent('esx:onPlayerJoined', src, charPrefix)
     
