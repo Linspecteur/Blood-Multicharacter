@@ -2,7 +2,7 @@
   <img src="https://img.shields.io/badge/FiveM-Script-orange?style=for-the-badge&logo=fivem&logoColor=white" />
   <img src="https://img.shields.io/badge/Framework-ESX-blue?style=for-the-badge" />
   <img src="https://img.shields.io/badge/Author-BloodLeak-purple?style=for-the-badge" />
-  <img src="https://img.shields.io/badge/License-All%20Rights%20Reserved-red?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" />
   
   <h1>👥 BloodMulticharacter (bl_multicharacter)</h1>
   <p><i>Gestionnaire de personnages moderne, immersif et ultra-personnalisé pour serveurs FiveM</i></p>
@@ -34,7 +34,7 @@ Optimisé à 0.00ms au repos, il synchronise en temps réel la base de données 
 - Détection multi-sources automatique :
   - **Table `bl_staff` (`bl_admin`)** via colonne `grade`.
   - **Table `users` / ESX** via colonne `group` et `xPlayer.getGroup()`.
-  - **Whitelists manuelles** par licence Rockstar dans [config.lua](file:///c:/Users/natha/Desktop/BloodLeak%20v2/bl_multicharacter/config.lua) (`Config.VIPLicenses` et `Config.StaffLicenses`).
+  - **Whitelists manuelles** par licence Rockstar dans [config.lua](config.lua) (`Config.VIPLicenses` et `Config.StaffLicenses`).
 - Sécurité côté serveur stricte interdisant toute création non autorisée sur les slots verrouillés.
 
 ### 📍 Sélecteur de Spawn & Dispersion Anti-Stacking
@@ -46,7 +46,7 @@ Optimisé à 0.00ms au repos, il synchronise en temps réel la base de données 
 - Transition fluide d'opacité vers la visibilité normale afin de préserver l'immersion et éviter d'interrompre les scènes RP en cours.
 
 ### 📱 Attribution & Persistance du Numéro de Téléphone
-- Générateur automatique de numéros de téléphone réalistes (`555-XXXX`).
+- Générateur automatique de numéros de téléphone réalistes (`XXX-XXXX`).
 - Attribution instantanée et sauvegarde en base de données lors de la création d'un citoyen ou au chargement de personnages existants.
 
 ### 🎬 Cinématique GTA Online & Masquage Intelligent des HUDs
@@ -98,12 +98,17 @@ Config.StaffGrades = {
 ## 🚀 Installation
 
 1. Placez le dossier `bl_multicharacter` dans votre répertoire de ressources.
-2. *(Optionnel / Recommandé)* Exécutez le fichier [bl_multicharacter.sql](file:///c:/Users/natha/Desktop/BloodLeak%20v2/bl_multicharacter/bl_multicharacter.sql) dans votre base de données pour ajouter les colonnes `phone_number` et `ssn` à la table `users`.
-3. Ajoutez dans votre `server.cfg` :
+2. **Obligatoire :** activez le mode multicharacter d'ESX. Dans la config d'`es_extended` (`config.lua` ou `shared/config/main.lua` selon la version), remplacez la ligne `Config.Multichar = ...` par :
+   ```lua
+   Config.Multichar = true
+   ```
+   Retirez aussi `esx_multicharacter` (et `esx_identity` si présent) de votre `server.cfg`. Sans cette étape, ESX charge le joueur directement à la connexion et le menu d'apparence s'ouvre avant que le joueur puisse créer son premier personnage.
+3. *(Optionnel / Recommandé)* Exécutez le fichier [bl_multicharacter.sql](bl_multicharacter.sql) dans votre base de données pour ajouter les colonnes `phone_number` et `ssn` à la table `users`.
+4. Ajoutez dans votre `server.cfg` :
    ```cfg
    ensure bl_multicharacter
    ```
-4. Démarrez votre serveur.
+5. Démarrez votre serveur.
 
 ---
 

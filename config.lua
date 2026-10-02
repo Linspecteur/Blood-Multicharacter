@@ -19,6 +19,12 @@ Config.Slots = {
 -- Nombre de slots maximum gérés
 Config.MaxSlots = 4
 
+-- Argent de départ d'un nouveau personnage
+Config.StartingMoney = {
+    bank = 50000,
+    money = 1000
+}
+
 -- =========================================================================
 --             GRADES AUTORISÉS POUR LES EMPLACEMENTS VIP (Slots 2 & 3)
 -- =========================================================================
